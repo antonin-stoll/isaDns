@@ -6,12 +6,17 @@
 #include <iostream>
 
 #define PORT_MAX 65535
+#define QUERY_LENGTH 200
+#define MSG_LENGTH 256
+#define INVERSEBIT      0b0000100000000000
+#define TRUNCATIONBIT   0b0000001000000000
+#define RECURSIONBIT    0b0000000100000000
 
 // class for parsing arguments and storing to config
 class Configuration{
 public:
     bool recursion;
-    bool reverse;
+    bool inverse;
     bool aaaa;
     const char* server;
     int port;
@@ -19,7 +24,7 @@ public:
 
     Configuration(){
         recursion = false;
-        reverse = false;
+        inverse = false;
         aaaa = false;
         server = nullptr;
         port = 53;  // default port for DNS
@@ -34,9 +39,9 @@ public:
 
         for (int i = 1; i < argc; ++i) {
             if (!strcmp(argv[i], "-r")){
-                reverse = true;
-            } else if (!strcmp(argv[i], "-x")){
                 recursion = true;
+            } else if (!strcmp(argv[i], "-x")){
+                inverse = true;
             } else if (!strcmp(argv[i], "-6")){
                 aaaa = true;
             } else if (!strcmp(argv[i], "-s")){
@@ -91,22 +96,32 @@ struct DNSHeader {
     uint16_t ARCount;       // Number of Additional Resource Records
 };
 
-void SetDNSHeader(DNSHeader* header){
+// setting dns header
+void SetDNSHeader(DNSHeader* header, Configuration config){
     header->ID = htons(45);
-    header->Flags = htons(0b0000000100000000);
+
+    uint16_t flags = 0;
+    if (config.inverse){
+        flags |= INVERSEBIT;
+    }
+    if (config.recursion){
+        flags |= RECURSIONBIT;
+    }
+
+    header->Flags = htons(flags);
     header->QDCount = htons(1);
     header->ANCount = htons(0);
     header-> NSCount = htons(0);
     header->ARCount = htons(0);
 }
 
-
-void SetDNSQuestion(uint8_t* query, const char* domain){
+// setting dns question
+void SetDNSQuestion(uint8_t* query, Configuration config){
     int position = 0;
     int length = 0;
-    while (domain[position]){
-        if (domain[position] != '.'){
-            query[position + 1] = domain[position];
+    while (config.adress[position]){
+        if (config.adress[position] != '.'){
+            query[position + 1] = config.adress[position];
             length++;
         } else {
             query[position - length] = length;
@@ -120,7 +135,7 @@ void SetDNSQuestion(uint8_t* query, const char* domain){
     query[position] = 0;
     position++;
 
-    uint16_t queryType = htons(1); // A record type
+    uint16_t queryType = htons(config.aaaa ? 28 : 1); // A or AAAA record type
     memcpy(&query[position], &queryType, sizeof(queryType));
     position += sizeof(queryType);
 
@@ -132,32 +147,33 @@ void SetDNSQuestion(uint8_t* query, const char* domain){
 
 
 int main(int argc, char* argv[]) {
-    std::cout << "Hello, World!" << std::endl;
-
+    // parsing command line arguments
     Configuration config;
     if (!config.ParseArgs(argc, argv)){
         std::cout << "Usage: dns [-r] [-x] [-6] -s server [-p port] adresa" << std::endl;
         return EXIT_FAILURE;
     }
 
-    std::cout << config.adress << std::endl;
-    std::cout << config.port << std::endl;
-    std::cout << config.server << std::endl;
-    std::cout << config.aaaa << std::endl;
-    std::cout << config.recursion << std::endl;
-    std::cout << config.reverse << std::endl;
+    // creating DNS question and header
+    uint8_t  query[QUERY_LENGTH];
+    DNSHeader header = DNSHeader();
 
-    return 0;
+    SetDNSHeader(&header, config);
+    SetDNSQuestion(query, config);
 
-    uint8_t  query[200];
-    DNSHeader header;
-
-    SetDNSHeader(&header);
-    SetDNSQuestion(query, "www.github.com");
-
-    uint8_t msg[256];
+    // combining header and question
+    uint8_t msg[MSG_LENGTH];
     memcpy(msg, &header, sizeof(header));
     memcpy(&msg[sizeof(header)], query, sizeof(query));
+
+    std::cout << "Formatted DNS Request Packet:" << std::endl;
+    for (int i = 0; i < 256; i++) {
+        printf("%02X ", msg[i]);
+        if ((i + 1) % 16 == 0)
+            std::cout << std::endl;
+    }
+    std::cout << "-----------------------" << std::endl;
+
 
     int sock;                        // socket descriptor
     int i;
@@ -167,7 +183,7 @@ int main(int argc, char* argv[]) {
 
     memset(&server,0,sizeof(server)); // erase the server structure
     server.sin_family = AF_INET;
-    server.sin_addr.s_addr = inet_addr("1.1.1.1");
+    server.sin_addr.s_addr = inet_addr(config.server);
     server.sin_port = htons(53);
 
     if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) == -1){  //create a client socket
