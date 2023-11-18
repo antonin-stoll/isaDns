@@ -20,9 +20,9 @@ public:
     bool recursion;
     bool inverse;
     bool aaaa;
-    const char* server;
+    char* server;
     int port;
-    const char* adress;
+    const char* address;
 
     Configuration(){
         recursion = false;
@@ -30,7 +30,7 @@ public:
         aaaa = false;
         server = nullptr;
         port = 53;  // default port for DNS
-        adress = nullptr;
+        address = nullptr;
     }
 
     bool ParseArgs(int argc, char* argv[]){
@@ -67,16 +67,16 @@ public:
                     return false;
                 }
 
-            } else if (adress == nullptr) {
-                adress = argv[i];
+            } else if (address == nullptr) {
+                address = argv[i];
             } else {
                 std::cerr << "Unknown argument: " << argv[i] << std::endl;
                 return false;
             }
         }
 
-        if (server == nullptr || adress == nullptr){ // required args
-            std::cerr << "Missing server or question adress!"  << std::endl;
+        if (server == nullptr || address == nullptr){ // required args
+            std::cerr << "Missing server or question address!"  << std::endl;
             return false;
         }
 
@@ -133,11 +133,13 @@ public:
     Configuration config;
     uint8_t *answer;
     int answerLen;
+    char ip[16]{};
 
     Resolver(){
+        queryLen = 0;
         answer = nullptr;
         answerLen = 0;
-        queryLen = 0;
+        memset(ip, 0 ,sizeof(ip));
     }
 
     ~Resolver(){
@@ -172,10 +174,10 @@ public:
     // setting dns question
     void SetDNSQuestion(){
         // domain into labels
-        int position = EncodeLabel(config.adress, query);
+        int position = EncodeLabel(config.address, query);
 
         // query type
-        uint16_t queryType = htons(config.aaaa ? 28 : 1); // AAAA or A record type
+        uint16_t queryType = htons(config.aaaa ? QType::AAAA : QType::A); // AAAA or A record type
         memcpy(&query[position], &queryType, sizeof(queryType));
         position += sizeof(queryType);
 
@@ -282,21 +284,21 @@ public:
         if (print){
             std::cout << "Answer section (" << answerCount << ")" << std::endl;
         }
-        parseRR(answerBody, position, buffer, answerCount, print);
+        parseRR(answerBody, &position, buffer, answerCount, print);
 
         // print authority section
         uint16_t authorityCount = ntohs(answerHeader.NSCount);
         if (print){
             std::cout << "Authority section (" << authorityCount << ")" << std::endl;
         }
-        parseRR(answerBody, position, buffer, authorityCount, print);
+        parseRR(answerBody, &position, buffer, authorityCount, print);
 
         // print additional section
         uint16_t additionalCount = ntohs(answerHeader.ARCount);
         if (print){
             std::cout << "Additional section (" << additionalCount << ")" << std::endl;
         }
-        parseRR(answerBody, position, buffer, additionalCount, print);
+        parseRR(answerBody, &position, buffer, additionalCount, print);
 
         std::cout << "Formatted DNS Request Packet:" << std::endl;
         for (int i = 0; i < sizeof(answerBody); i++) {
@@ -307,56 +309,72 @@ public:
         std::cout << "-----------------------" << std::endl;
     }
 
-    void parseRR(const uint8_t *answerBody, int position, char *buffer, uint16_t rrCount, bool print) const{
+    void parseRR(const uint8_t *answerBody, int *position, char *buffer, uint16_t rrCount, bool print){
         uint16_t tmp = 0;
         for (int i = 0; i < rrCount; ++i) {
-            position += DecodeLabel(&answerBody[position], buffer, answer);
+            *position += DecodeLabel(&answerBody[*position], buffer, answer);
             if (print){
                 std::cout << "\t" << buffer << ", ";                                            // NAME
             }
 
-            memcpy(&tmp, &answerBody[position], sizeof(uint16_t));
+            memcpy(&tmp, &answerBody[*position], sizeof(uint16_t));
             QType qtype = static_cast<QType>(ntohs(tmp));
             if (print){
                 printQType(qtype);                                                 // QTYPE
             }
-            position += sizeof(uint16_t);
+            *position += sizeof(uint16_t);
 
             if (print){
                 std::cout << ", ";
             }
 
-            memcpy(&tmp, &answerBody[position], sizeof(uint16_t));
+            memcpy(&tmp, &answerBody[*position], sizeof(uint16_t));
             if (print){
                 printQClass(static_cast<QClass>(ntohs(tmp)));            // QCLASS
             }
-            position += sizeof(uint16_t);
+            *position += sizeof(uint16_t);
 
             if (print){
                 std::cout << ", ";
             }
 
             uint32_t ttl = 0;
-            memcpy(&ttl, &answerBody[position], sizeof(uint32_t));
+            memcpy(&ttl, &answerBody[*position], sizeof(uint32_t));
             if (print){
                 std::cout << ntohl(ttl) << ", ";                                // TTL
             }
-            position += sizeof(uint32_t);
+            *position += sizeof(uint32_t);
 
-            position += sizeof(uint16_t);                                          // skipping RDLENGTH
+            *position += sizeof(uint16_t);                                          // skipping RDLENGTH
             switch (qtype) {
                 case A:
-                    for (int j = 0; j < 4; ++j) {
+                    for (int j = 0, k = 0; j < 4; ++j) {
                         if (print){
-                            std::cout << (int) answerBody[position] << (j < 3 ? "." : "");
+                            std::cout << (int) answerBody[*position] << (j < 3 ? "." : "");
                         }
-                        position++;
+                        k += snprintf(&ip[k], 4, "%d", (int) answerBody[*position]);
+                        if (j < 3){
+                            ip[k++] = '.';
+                        }
+                        (*position)++;
                     }
                     break;
                 case CNAME:
-                    position += DecodeLabel(&answerBody[position], buffer, answer);
+                    *position += DecodeLabel(&answerBody[*position], buffer, answer);
                     if (print){
                         std::cout << buffer;
+                    }
+                    break;
+                default:
+                    if (print){
+                        std::cout << "Not implemented, data: ";
+                    }
+                    memcpy(&tmp, &answerBody[*position - 2], sizeof(uint16_t));
+                    for (int j = 0; j < ((int) ntohs(tmp)); j++) {
+                        if (print){
+                            printf("%02X ", answerBody[*position]);
+                        }
+                        (*position)++;
                     }
                     break;
             }
@@ -525,6 +543,21 @@ int main(int argc, char* argv[]) {
     if (!config.ParseArgs(argc, argv)){
         std::cout << "Usage: dns [-r] [-x] [-6] -s server [-p port] adresa" << std::endl;
         return EXIT_FAILURE;
+    }
+
+    struct in_addr ipBuffer;
+    if (inet_pton(AF_INET, config.server, &ipBuffer) != 1){       // server is not ip address
+        Configuration serverConf = Configuration();
+        serverConf.server = "1.1.1.1";
+        serverConf.address = config.server;
+        serverConf.recursion = true;
+
+        Resolver serverResolver = Resolver();
+        serverResolver.Configure(serverConf);
+        serverResolver.SendQuestion();
+        serverResolver.ParseAnswer(false);
+        config.server = new char[16];
+        strcpy(config.server, serverResolver.ip);
     }
 
     Resolver resolver = Resolver();
