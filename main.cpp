@@ -7,7 +7,7 @@
 
 #define PORT_MAX 65535
 #define QUERY_LENGTH 200
-#define MSG_LENGTH 256
+#define MSG_LENGTH 2048
 #define INVERSEBIT      0b0000100000000000
 #define AABIT           0b0000010000000000
 #define TRUNCATIONBIT   0b0000001000000000
@@ -22,7 +22,7 @@ public:
     bool aaaa;
     char* server;
     int port;
-    const char* address;
+    char* address;
 
     Configuration(){
         recursion = false;
@@ -33,6 +33,12 @@ public:
         address = nullptr;
     }
 
+    /**
+     *
+     * @param argc
+     * @param argv
+     * @return
+     */
     bool ParseArgs(int argc, char* argv[]){
         if (argc > 20){
             std::cerr << "Too many arguments! " << argc << std::endl;
@@ -173,11 +179,16 @@ public:
 
     // setting dns question
     void SetDNSQuestion(){
-        // domain into labels
-        int position = EncodeLabel(config.address, query);
+        int position;
+        if (config.inverse){
+            position = EncodeIP(config.address, query);
+        } else{
+            // domain into labels
+            position = EncodeLabel(config.address, query);
+        }
 
         // query type
-        uint16_t queryType = htons(config.aaaa ? QType::AAAA : QType::A); // AAAA or A record type
+        uint16_t queryType = htons(config.inverse ? QType::PTR : (config.aaaa ? QType::AAAA : QType::A)); // AAAA or A record type
         memcpy(&query[position], &queryType, sizeof(queryType));
         position += sizeof(queryType);
 
@@ -204,30 +215,25 @@ public:
         server.sin_port = htons(53);
 
         if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) == -1){  //create a client socket
-            // error
+            std::cerr << "Failed creating socket!" << std::endl;
+            exit(EXIT_FAILURE);
         }
 
         if (connect(sock, (struct sockaddr *)&server, sizeof(server))  == -1){
-            // error
+            std::cerr << "Failed connecting to peer!" << std::endl;
+            exit(EXIT_FAILURE);
         }
 
         i = send(sock,msg, sizeof(msg),0);
         if (i == -1){
-            // error
+            std::cerr << "Failed sending the packet!" << std::endl;
+            exit(EXIT_FAILURE);
         }
 
         uint8_t buffer[MSG_LENGTH];
-        answerLen = recv(sock,buffer, MSG_LENGTH,0);
+        answerLen = (int) recv(sock,buffer, MSG_LENGTH,0);
         answer = new uint8_t[answerLen];
         memcpy(answer, buffer, answerLen);
-
-        std::cout << "Formatted DNS Request Packet:" << std::endl;
-        for (int i = 0; i < answerLen; i++) {
-            printf("%02X ", answer[i]);
-            if ((i + 1) % 16 == 0)
-                std::cout << std::endl;
-        }
-        std::cout << "-----------------------" << std::endl;
     }
 
     void ParseAnswer(bool print){
@@ -299,14 +305,6 @@ public:
             std::cout << "Additional section (" << additionalCount << ")" << std::endl;
         }
         parseRR(answerBody, &position, buffer, additionalCount, print);
-
-        std::cout << "Formatted DNS Request Packet:" << std::endl;
-        for (int i = 0; i < sizeof(answerBody); i++) {
-            printf("%02X ", answerBody[i]);
-            if ((i + 1) % 16 == 0)
-                std::cout << std::endl;
-        }
-        std::cout << "-----------------------" << std::endl;
     }
 
     void parseRR(const uint8_t *answerBody, int *position, char *buffer, uint16_t rrCount, bool print){
@@ -360,9 +358,22 @@ public:
                     }
                     break;
                 case CNAME:
+                case NS:
+                case PTR:
                     *position += DecodeLabel(&answerBody[*position], buffer, answer);
                     if (print){
                         std::cout << buffer;
+                    }
+                    break;
+                case AAAA:
+                    for (int j = 0; j < 16; j++) {
+                        if (print){
+                            printf("%02X", answerBody[*position]);
+                            if (j % 2 == 1 && j < 14){
+                                std::cout << ":";
+                            }
+                        }
+                        (*position)++;
                     }
                     break;
                 default:
@@ -385,7 +396,30 @@ public:
         }
     }
 
-    static int EncodeLabel(const char *src, uint8_t *dst){
+    int EncodeIP(const char *src, uint8_t *dst){
+        if (config.aaaa){
+            uint8_t addr[16];
+            inet_pton(AF_INET6, src, addr);
+        } else {
+            uint8_t addr[4];
+            uint8_t reversedAddr[4];
+            inet_pton(AF_INET, src, addr);
+            for (int i = 0; i < sizeof(addr); ++i) {
+                reversedAddr[i] = addr[3-i];
+            }
+            char reversedAddrStr[16 + sizeof(".IN-ADDR.ARPA") + 1];
+            memset(reversedAddrStr, 0, sizeof(reversedAddrStr));
+            inet_ntop(AF_INET, reversedAddr, reversedAddrStr, sizeof(reversedAddrStr));
+
+            strcpy(&reversedAddrStr[strlen(reversedAddrStr)], ".IN-ADDR.ARPA");
+            return EncodeLabel(reversedAddrStr, dst);
+        }
+    }
+
+    static int EncodeLabel(char *src, uint8_t *dst){
+        if (src[strlen(src)-1] == '.'){
+            src[strlen(src)-1] = '\0';
+        }
         int position = 0;
         int length = 0;
         while (src[position]){
@@ -407,6 +441,13 @@ public:
         return position;
     }
 
+    /**
+     * Decodes sequence of labels into readable string
+     * @param src labels to be decoded
+     * @param dst destination of final string
+     * @param wholeSrc complete query
+     * @return number of bytes decoded from src
+     */
     static int DecodeLabel(const uint8_t *src, char *dst, const uint8_t *wholeSrc){
         int positionSrc = 0;
         int positionDst = 0;
@@ -444,6 +485,10 @@ public:
         return positionSrc;
     }
 
+    /**
+     * Prints string representation of QType to std::cout
+     * @param type
+     */
     static void printQType(QType type) {
         switch (type) {
             case QType::A:
@@ -514,6 +559,10 @@ public:
         }
     }
 
+    /**
+     * Prints string representation of QClass to std::cout
+     * @param qClass
+     */
     static void printQClass(QClass qClass) {
         switch (qClass) {
             case QClass::IN:
@@ -560,6 +609,7 @@ int main(int argc, char* argv[]) {
         strcpy(config.server, serverResolver.ip);
     }
 
+    // resolving user query
     Resolver resolver = Resolver();
     resolver.Configure(config);
     resolver.SendQuestion();
