@@ -1,3 +1,10 @@
+/**
+ * projekt: DNS resolver
+ * author: Antonín Štoll
+ * login: xstoll01
+ * date: 20.11.2023
+ */
+
 #include <cstdio>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -216,8 +223,8 @@ public:
         memset(&server,0,sizeof(server)); // erase the server structure
         memset(&serverV6,0,sizeof(serverV6)); // erase the server structure
 
-        struct in_addr ipBuffer;
-        struct in6_addr ipv6Buffer;
+        struct in_addr ipBuffer{};
+        struct in6_addr ipv6Buffer{};
 
         bool ipv6 = false;
         if (inet_pton(AF_INET6, config.server, &ipv6Buffer) == 1){
@@ -259,7 +266,7 @@ public:
             }
         }
 
-        i = send(sock,msg, sizeof(msg),0);
+        i = (int) send(sock,msg, sizeof(msg),0);
         if (i == -1){
             std::cerr << "Failed sending the packet!" << std::endl;
             exit(EXIT_FAILURE);
@@ -363,7 +370,7 @@ public:
             }
 
             memcpy(&tmp, &answerBody[*position], sizeof(uint16_t));
-            QType qtype = static_cast<QType>(ntohs(tmp));
+            auto qtype = static_cast<QType>(ntohs(tmp));
             if (print){
                 printQType(qtype);                                                 // QTYPE
             }
@@ -449,7 +456,7 @@ public:
      * @param dst destination of encoded labels
      * @return number of used bytes from src
      */
-    int EncodeIP(const char *src, uint8_t *dst){
+    static int EncodeIP(const char *src, uint8_t *dst){
         struct in6_addr ipv6Buffer{};
         if (inet_pton(AF_INET6, src, &ipv6Buffer) == 1){
             // making full length ipv6
@@ -530,13 +537,17 @@ public:
         int positionSrc = 0;
         int positionDst = 0;
         int returnedPosition = 0;
+        bool jumped = false;
 
         while (src[positionSrc] != 0){
             if (src[positionSrc] & LABELPOINER){
                 uint16_t tmp;
                 memcpy(&tmp, &src[positionSrc], sizeof(uint16_t));
                 src = wholeSrc;
-                returnedPosition = positionSrc + (int) sizeof(uint16_t);
+                if (!jumped){
+                    returnedPosition = positionSrc + (int) sizeof(uint16_t);
+                }
+                jumped = true;
                 positionSrc = ntohs(tmp) - 0xC000;
             }
 
@@ -557,7 +568,7 @@ public:
         positionSrc++;
         dst[positionDst] = 0;
 
-        if (returnedPosition != 0){
+        if (jumped){
             return returnedPosition;
         }
         return positionSrc;
@@ -676,7 +687,8 @@ int main(int argc, char* argv[]) {
     struct in6_addr ipv6Buffer{};
     if (inet_pton(AF_INET, config.server, &ipBuffer) != 1 && inet_pton(AF_INET6, config.server, &ipv6Buffer) != 1){       // server is not ip address
         Configuration serverConf = Configuration();
-        serverConf.server = "1.1.1.1";
+
+        serverConf.server = (char *)"1.1.1.1";
         serverConf.address = config.server;
         serverConf.recursion = true;
 

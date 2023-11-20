@@ -21,3 +21,11 @@ echo "./dns -s 1.1.1.1 -x 147.229.2.90 -r"
 echo "----------------test 6---------------"
 echo "./dns -6 -s 1.1.1.1 -r www.google.com"
 ./dns -6 -s 1.1.1.1 -r www.google.com
+
+echo "-------test 7: nevalidní vstup-------"
+echo "./dns -6 -r www.google.com"
+./dns -6 -r www.google.com
+
+echo "-------test 8: nevalidní vstup-------"
+echo "./dns -s -6 -r www.google.com"
+./dns -s -6 -r www.google.com
