@@ -469,8 +469,7 @@ public:
                 reversedAddrStr[2*i + 1] = '.';
             }
 
-            int len = strlen(reversedAddrStr);
-            strcpy(&reversedAddrStr[len], "ip6.arpa");
+            strcpy(&reversedAddrStr[strlen(reversedAddrStr)], "ip6.arpa");
             return EncodeLabel(reversedAddrStr, dst);
         } else {
             uint8_t addr[4];
