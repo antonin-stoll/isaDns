@@ -272,8 +272,26 @@ public:
             exit(EXIT_FAILURE);
         }
 
+        // setting timeout to 5 seconds
+        struct timeval timeout{};
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) == -1) {
+            std::cerr << "Error setting receive timeout!";
+        }
+
+        // receiving data
         uint8_t buffer[MSG_LENGTH];
         answerLen = (int) recv(sock,buffer, MSG_LENGTH,0);
+        if (answerLen == -1){
+            if (errno == EWOULDBLOCK){
+                std::cerr << "Receive timeout occurred!" << std::endl;
+                exit(EXIT_FAILURE);
+            } else {
+                std::cerr << "Error receiving data!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        }
         answer = new uint8_t[answerLen];
         memcpy(answer, buffer, answerLen);
     }
