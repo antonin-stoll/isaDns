@@ -8,7 +8,6 @@
 #define PORT_MAX 65535
 #define QUERY_LENGTH 200
 #define MSG_LENGTH 2048
-#define INVERSEBIT      0b0000100000000000
 #define AABIT           0b0000010000000000
 #define TRUNCATIONBIT   0b0000001000000000
 #define RECURSIONBIT    0b0000000100000000
@@ -34,10 +33,10 @@ public:
     }
 
     /**
-     *
-     * @param argc
-     * @param argv
-     * @return
+     * Parsing commandline arguments
+     * @param argc argc
+     * @param argv argv
+     * @return True on success
      */
     bool ParseArgs(int argc, char* argv[]){
         if (argc > 20){
@@ -158,14 +157,13 @@ public:
         SetDNSQuestion();
     }
 
-    // setting dns header
+    /**
+     * Constructs header of the question
+     */
     void SetDNSHeader(){
         header.ID = htons(45);
 
         uint16_t flags = 0;
-        if (config.inverse){
-            flags |= INVERSEBIT;
-        }
         if (config.recursion){
             flags |= RECURSIONBIT;
         }
@@ -177,7 +175,9 @@ public:
         header.ARCount = htons(0);
     }
 
-    // setting dns question
+    /**
+     * Constructs question to be sent
+     */
     void SetDNSQuestion(){
         int position;
         if (config.inverse){
@@ -187,8 +187,8 @@ public:
             position = EncodeLabel(config.address, query);
         }
 
-        // query type
-        uint16_t queryType = htons(config.inverse ? QType::PTR : (config.aaaa ? QType::AAAA : QType::A)); // AAAA or A record type
+        // query type PTR, AAAA or A record type
+        uint16_t queryType = htons(config.inverse ? QType::PTR : (config.aaaa ? QType::AAAA : QType::A));
         memcpy(&query[position], &queryType, sizeof(queryType));
         position += sizeof(queryType);
 
@@ -199,6 +199,9 @@ public:
         queryLen = position;
     }
 
+    /**
+     * Sends DNS packet via UDP
+     */
     void SendQuestion(){
         // combining header and question
         uint8_t msg[sizeof(header) + queryLen];
@@ -207,21 +210,53 @@ public:
 
         int sock;                           // socket descriptor
         int i;
-        sockaddr_in server{};                 // address structures of the server and the client
+        sockaddr_in server{};                 // ipv4 address structures of the server and the client
+        sockaddr_in6 serverV6{};              // ipv6 address structures of the server and the client
 
         memset(&server,0,sizeof(server)); // erase the server structure
-        server.sin_family = AF_INET;
-        server.sin_addr.s_addr = inet_addr(config.server);
-        server.sin_port = htons(53);
+        memset(&serverV6,0,sizeof(serverV6)); // erase the server structure
 
-        if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) == -1){  //create a client socket
-            std::cerr << "Failed creating socket!" << std::endl;
+        struct in_addr ipBuffer;
+        struct in6_addr ipv6Buffer;
+
+        bool ipv6 = false;
+        if (inet_pton(AF_INET6, config.server, &ipv6Buffer) == 1){
+            serverV6.sin6_addr = ipv6Buffer;
+            serverV6.sin6_family = AF_INET6;
+            serverV6.sin6_port = htons(config.port);
+            ipv6 = true;
+        } else if (inet_pton(AF_INET, config.server, &ipBuffer) == 1){
+            server.sin_addr = ipBuffer;
+            server.sin_family = AF_INET;
+            server.sin_port = htons(config.port);
+            ipv6 = false;
+        } else {
+            std::cerr << "Failed parsing IP!" << std::endl;
             exit(EXIT_FAILURE);
         }
 
-        if (connect(sock, (struct sockaddr *)&server, sizeof(server))  == -1){
-            std::cerr << "Failed connecting to peer!" << std::endl;
-            exit(EXIT_FAILURE);
+        if (ipv6){
+            if ((sock = socket(AF_INET6 , SOCK_DGRAM , 0)) == -1){  //create a client socket
+                std::cerr << "Failed creating socket!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) == -1){  //create a client socket
+                std::cerr << "Failed creating socket!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        if (ipv6){
+            if (connect(sock, (struct sockaddr *)&serverV6, sizeof(serverV6))  == -1){
+                std::cerr << "Failed connecting to peer!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if (connect(sock, (struct sockaddr *)&server, sizeof(server))  == -1){
+                std::cerr << "Failed connecting to peer!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
         }
 
         i = send(sock,msg, sizeof(msg),0);
@@ -236,6 +271,10 @@ public:
         memcpy(answer, buffer, answerLen);
     }
 
+    /**
+     * Decodes answer and writes it to std::cout if print is true
+     * @param print bool deciding if answer should be printed
+     */
     void ParseAnswer(bool print){
         DNSHeader answerHeader = DNSHeader();
         uint8_t answerBody[answerLen - sizeof(header)];
@@ -307,6 +346,14 @@ public:
         parseRR(answerBody, &position, buffer, additionalCount, print);
     }
 
+    /**
+     * Decodes records and prints them if print is true
+     * @param answerBody array to be decoded
+     * @param position position of next RR
+     * @param buffer destination of decoded line
+     * @param rrCount how many RRs is in answerBody
+     * @param print bool deciding if answer should be printed
+     */
     void parseRR(const uint8_t *answerBody, int *position, char *buffer, uint16_t rrCount, bool print){
         uint16_t tmp = 0;
         for (int i = 0; i < rrCount; ++i) {
@@ -396,10 +443,35 @@ public:
         }
     }
 
+    /**
+     * Encodes IP to labels (for reversed query use)
+     * @param src IP string to be encoded
+     * @param dst destination of encoded labels
+     * @return number of used bytes from src
+     */
     int EncodeIP(const char *src, uint8_t *dst){
-        if (config.aaaa){
+        struct in6_addr ipv6Buffer{};
+        if (inet_pton(AF_INET6, src, &ipv6Buffer) == 1){
+            // making full length ipv6
             uint8_t addr[16];
             inet_pton(AF_INET6, src, addr);
+            char addrStr[33];
+            memset(addrStr, 0, sizeof(addrStr));
+            for (int i = 0; i < (sizeof(addr)/2); ++i) {
+                sprintf(&addrStr[i*4], "%04X", htons(*((uint16_t *)&addr[2*i]))); // trochu nechutné :(
+            }
+
+            // reversing and adding dots
+            char reversedAddrStr[64 + sizeof(".ip6.arpa") + 1];
+            memset(reversedAddrStr, 0, sizeof(reversedAddrStr));
+            for (int i = 0; i < (sizeof(addrStr) - 1); ++i) {
+                reversedAddrStr[2*i] = addrStr[sizeof(addrStr)-i-2];
+                reversedAddrStr[2*i + 1] = '.';
+            }
+
+            int len = strlen(reversedAddrStr);
+            strcpy(&reversedAddrStr[len], "ip6.arpa");
+            return EncodeLabel(reversedAddrStr, dst);
         } else {
             uint8_t addr[4];
             uint8_t reversedAddr[4];
@@ -407,15 +479,22 @@ public:
             for (int i = 0; i < sizeof(addr); ++i) {
                 reversedAddr[i] = addr[3-i];
             }
-            char reversedAddrStr[16 + sizeof(".IN-ADDR.ARPA") + 1];
+
+            char reversedAddrStr[16 + sizeof(".in-addr.arpa") + 1];
             memset(reversedAddrStr, 0, sizeof(reversedAddrStr));
             inet_ntop(AF_INET, reversedAddr, reversedAddrStr, sizeof(reversedAddrStr));
 
-            strcpy(&reversedAddrStr[strlen(reversedAddrStr)], ".IN-ADDR.ARPA");
+            strcpy(&reversedAddrStr[strlen(reversedAddrStr)], ".in-addr.arpa");
             return EncodeLabel(reversedAddrStr, dst);
         }
     }
 
+    /**
+     * Encodes domain name into labels
+     * @param src domain name string to be encoded
+     * @param dst destination of encoded labels
+     * @return number of used bytes in dst
+     */
     static int EncodeLabel(char *src, uint8_t *dst){
         if (src[strlen(src)-1] == '.'){
             src[strlen(src)-1] = '\0';
@@ -446,7 +525,7 @@ public:
      * @param src labels to be decoded
      * @param dst destination of final string
      * @param wholeSrc complete query
-     * @return number of bytes decoded from src
+     * @return number of used bytes from src
      */
     static int DecodeLabel(const uint8_t *src, char *dst, const uint8_t *wholeSrc){
         int positionSrc = 0;
@@ -594,8 +673,9 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    struct in_addr ipBuffer;
-    if (inet_pton(AF_INET, config.server, &ipBuffer) != 1){       // server is not ip address
+    struct in_addr ipBuffer{};
+    struct in6_addr ipv6Buffer{};
+    if (inet_pton(AF_INET, config.server, &ipBuffer) != 1 && inet_pton(AF_INET6, config.server, &ipv6Buffer) != 1){       // server is not ip address
         Configuration serverConf = Configuration();
         serverConf.server = "1.1.1.1";
         serverConf.address = config.server;
@@ -616,14 +696,4 @@ int main(int argc, char* argv[]) {
     resolver.ParseAnswer(true);
 
     return 0;
-
-    /*
-    std::cout << "Formatted DNS Request Packet:" << std::endl;
-    for (int i = 0; i < 256; i++) {
-        printf("%02X ", msg[i]);
-        if ((i + 1) % 16 == 0)
-            std::cout << std::endl;
-    }
-    std::cout << "-----------------------" << std::endl;
-     */
 }

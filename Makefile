@@ -1,28 +1,10 @@
+all: dns  
 
-PROJ = dns
-EXECUTABLE = $(PROJ)
-OBJS = dns.o
-
-VPATH = src include
-CC=gcc
-CFLAGS=-std=c99 -Wall -Wextra -pedantic -fcommon
-
-ZIP_FILE = $(PROJ).zip
-
-.PHONY: all pack run clean
-
-all: $(EXECUTABLE)
-
-run: $(EXECUTABLE)
-	./$(EXECUTABLE) $(ARGS)
-
-$(EXECUTABLE): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
-
-pack: $(ZIP_FILE)
+dns: dns.cpp     
+	g++ -std=c++14 -lm -pthread dns.cpp -o dns  
 
 clean:
-	rm -f $(EXECUTABLE) *.o $(ZIP_FILE)
+	rm -f *.o dns
 
-
-#
+test: dns
+	bash test.sh
